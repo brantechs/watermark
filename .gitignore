@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Temporary files and output
+temp/
+output/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
