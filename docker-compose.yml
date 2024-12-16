@@ -1,0 +1,11 @@
+version: "3.8"
+services:
+  discord-bot:
+    build: .
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - COMMAND_PREFIX=${COMMAND_PREFIX}
+      - BASE_DIR=${BASE_DIR}
+    volumes:
+      - ./data:/app/data
+    restart: always
