@@ -44,7 +44,7 @@ Botのコマンドは、環境変数`COMMAND_PREFIX`で指定されたプレフ�
 
 ## 環境変数
 - **`DISCORD_TOKEN`**: Discord Botのトークン。
-- **`COMMAND_PREFIX`**: Botのコマンドプレフィックス（例: `!`）。
+- **`COMMAND_PREFIX`**: Botのコマンドプレフィックス（例: `/`）。
 - **`BASE_DIR`**: Botが設定データや一時ファイルを保存するディレクトリ。
 
 ---
@@ -55,7 +55,7 @@ Botのコマンドは、環境変数`COMMAND_PREFIX`で指定されたプレフ�
 
 ```env
 DISCORD_TOKEN=your_discord_bot_token
-COMMAND_PREFIX=!
+COMMAND_PREFIX=/
 BASE_DIR=./data
 ```
 
@@ -85,6 +85,17 @@ python bot.py
 
 3. **メッセージのサジェスト機能**
    - スラッシュコマンドや入力補完を活用し、ユーザーが利用可能なコマンドやオプションを簡単に選択できるようにする。
+
+---
+
+## 既知の問題
+
+1. **透過情報を持つgif形式への対応**
+   - 残像が残る問題があるため、`src/utils/watermark_processor.py`の更新必要
+
+~~2. **jpegファイルを送信した際にRGB形式に対応していないとエラーすることがある**~~
+ ~~- 詳細確認中~~
+
 
 ---
 
