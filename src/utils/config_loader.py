@@ -33,8 +33,19 @@ class ConfigLoader:
         return server_settings["channels"].get(str(channel_id), {})
 
     def set_channel_settings(self, server_id, channel_id, settings):
+        """
+        チャンネル設定を保存。既存の設定がある場合は上書きせず追記。
+        """
         server_settings = self.load_server_settings(server_id)
-        server_settings["channels"][str(channel_id)] = settings
+        channel_settings = server_settings["channels"].get(str(channel_id), {})
+
+        # 既存の設定に新しい設定を更新
+        channel_settings.update(settings)
+
+        # サーバー全体の設定を更新
+        server_settings["channels"][str(channel_id)] = channel_settings
+
+        # 保存
         self.save_server_settings(server_id, server_settings)
 
     def delete_channel_settings(self, server_id, channel_id):
@@ -43,6 +54,18 @@ class ConfigLoader:
             del server_settings["channels"][str(channel_id)]
             self.save_server_settings(server_id, server_settings)
 
+    # 透過度のみを変更するメソッド
+    async def set_transparency(self, server_id, channel_id, transparency):
+        """
+        チャンネル設定に透過度を保存
+        """
+        if not isinstance(transparency, int) or not (1 <= transparency <= 100):
+            raise ValueError("Transparency must be an integer between 1 and 100.")
+        
+        try:
+            self.set_channel_settings(server_id, channel_id, {"transparency": transparency})
+        except Exception as e:
+            raise RuntimeError(f"Failed to set transparency: {e}")
 
     
 def load_env():
