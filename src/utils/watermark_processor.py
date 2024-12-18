@@ -46,7 +46,7 @@ def get_gif_frames(image: Image.Image) -> list[Image.Image]:
     return frames
 
 # メイン処理
-def process_images(base_image_path: Path, overlay_image_path: Path, output_folder: Path, transparencies=[0.15]):
+def process_images(base_image_path: Path, overlay_image_path: Path, output_folder: Path, transparency=0.15):
     """
     入力画像にウォーターマークを適用し、指定されたフォルダに保存する。
     """
@@ -64,37 +64,37 @@ def process_images(base_image_path: Path, overlay_image_path: Path, output_folde
     overlay_image = overlay_image.resize(base_image.size, Image.Resampling.LANCZOS)
 
     if ext in [".gif", ".png"] and getattr(base_image, "is_animated", False):
-        for transparency in transparencies:
-            frames = get_gif_frames(base_image)
-            processed_frames = []
+        # アニメーションGIFまたはPNGの場合
+        frames = get_gif_frames(base_image)
+        processed_frames = []
 
-            for frame in frames:
-                base_frame = frame.convert("RGBA")
-                combined_frame = overlay_images(base_frame, overlay_image, transparency)
-                processed_frames.append(np.array(combined_frame))
+        for frame in frames:
+            base_frame = frame.convert("RGBA")
+            combined_frame = overlay_images(base_frame, overlay_image, transparency)
+            processed_frames.append(np.array(combined_frame))
 
-            output_file_path = output_folder / f"{base_name}_{int(transparency * 100)}％{ext}"
-            iio.imwrite(
-                str(output_file_path),
-                processed_frames,
-                duration=base_image.info.get("duration", 100),
-                loop=base_image.info.get("loop", 0),
-                plugin="pillow" if ext == ".png" else None
-            )
+        output_file_path = output_folder / f"{base_name}_{int(transparency * 100)}％{ext}"
+        iio.imwrite(
+            str(output_file_path),
+            processed_frames,
+            duration=base_image.info.get("duration", 100),
+            loop=base_image.info.get("loop", 0),
+            plugin="pillow" if ext == ".png" else None
+        )
     else:
+        # 静止画像の場合
         base_frame = base_image.convert("RGBA")
-        for transparency in transparencies:
-            combined_image = overlay_images(base_frame, overlay_image, transparency)
+        combined_image = overlay_images(base_frame, overlay_image, transparency)
 
-            # 保存前に非透過形式の場合はRGBに変換
-            if ext in [".jpg", ".jpeg", ".bmp"]:
-                print(f"Converting image to RGB for format: {ext}")
-                combined_image = combined_image.convert("RGB")
+        # 保存前に非透過形式の場合はRGBに変換
+        if ext in [".jpg", ".jpeg", ".bmp"]:
+            print(f"Converting image to RGB for format: {ext}")
+            combined_image = combined_image.convert("RGB")
 
-            # 出力ファイルを保存
-            output_image_path = output_folder / f"{base_name}_{int(transparency * 100)}％{ext}"
-            try:
-                print(f"Saving image to: {output_image_path}")
-                combined_image.save(output_image_path)
-            except Exception as e:
-                raise IOError(f"Failed to save image: {output_image_path}. Error: {e}")
+        # 出力ファイルを保存
+        output_image_path = output_folder / f"{base_name}_{int(transparency * 100)}％{ext}"
+        try:
+            print(f"Saving image to: {output_image_path}")
+            combined_image.save(output_image_path)
+        except Exception as e:
+            raise IOError(f"Failed to save image: {output_image_path}. Error: {e}")

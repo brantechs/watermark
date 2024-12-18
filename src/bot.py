@@ -123,6 +123,37 @@ async def upload_watermark(ctx):
     config_loader.set_channel_settings(server_id, channel_id, {"active_watermark": str(watermark_path)})
     await ctx.send(f"Watermark uploaded and set to: {attachment.filename}")
 
+# 透過度を変更する関数
+@bot.command(aliases=['wm_settp'])
+async def set_watermark_transparency(ctx, transparency: int = None):
+    """
+    チャンネルごとの透過度を設定するコマンド
+    """
+    if transparency is None:
+        await ctx.send("Please specify a transparency value between 1 and 100. Example: `/wm_settp 50`.")
+        return
+
+    try:
+        # 引数を整数に変換
+        transparency = int(transparency)
+    except ValueError:
+        await ctx.send("Invalid transparency value. Please provide a valid number between 1 and 100.")
+        return
+
+    if not (1 <= transparency <= 100):
+        await ctx.send("Invalid transparency value. Please provide a number between 1 and 100.")
+        return
+
+    server_id = ctx.guild.id
+    channel_id = ctx.channel.id
+
+    try:
+        # 透過度を設定
+        await config_loader.set_transparency(server_id, channel_id, transparency)
+        await ctx.send(f"Transparency has been set to {transparency}% for this channel.")
+    except Exception as e:
+        await ctx.send(f"An error occurred while setting transparency: {e}")
+
 @bot.command(aliases=['wm_check', 'sw'])
 async def show_watermark(ctx):
     server_id = ctx.guild.id
@@ -134,13 +165,15 @@ async def show_watermark(ctx):
         return
 
     active_watermark = channel_settings.get("active_watermark")
+    transparency = channel_settings.get("transparency", 15)  # デフォルト透過度
+
     if active_watermark and Path(active_watermark).exists():
         file = discord.File(active_watermark, filename="watermark.png")
-        await ctx.send("Current active watermark:", file=file)
+        await ctx.send(f"Current active watermark with transparency {transparency}:", file=file)
     else:
         await ctx.send("No active watermark is set for this channel.")
         # デバッグ用ログ
-        print(f"No active watermark for channel {server_id}/{channel_id}: {channel_settings}")
+        print(f"No active watermark for channel : {channel_settings}")
 
 @bot.command(aliases=['wm_clear', 'cw'])
 async def clear_watermark(ctx):
@@ -157,6 +190,16 @@ supported_extensions = list(Image.registered_extensions().keys())
 import asyncio
 
 lock = asyncio.Lock()  # ロックを作成
+
+# 透過度を確認する関数
+async def set_transparency(server_id, channel_id, transparency):
+    """
+    チャンネル設定に透過度を保存
+    """
+    try:
+        config_loader.set_channel_settings(server_id, channel_id, {"transparency": transparency})
+    except Exception as e:
+        logging.error(f"Failed to set transparency: {e}")
 
 @bot.event
 async def on_message(message):
@@ -186,6 +229,7 @@ async def on_message(message):
 
     # チャンネル設定を取得
     channel_settings = config_loader.get_channel_settings(server_id, channel_id)
+    transparency = channel_settings.get("transparency", 15)  / 100  # 透過率を0.0~1.0に変換
 
     # チャンネルごとのウォーターマークを取得
     active_watermark = channel_settings.get("active_watermark")
@@ -224,7 +268,7 @@ async def on_message(message):
             try:
                 # 一時的な保存パス
                 input_path = temp_dir / attachment.filename
-                output_file_name = f"{attachment.filename.split('.')[0]}_15％{extension}" # 一時的に保存する出力先
+                output_file_name = f"{attachment.filename.split('.')[0]}_{str(int(transparency*100))}％{extension}" # 一時的に保存する出力先
                 output_path = temp_dir / output_file_name
 
                 # 添付ファイルを保存
@@ -245,7 +289,7 @@ async def on_message(message):
                     base_image_path=input_path,
                     overlay_image_path=Path(active_watermark),
                     output_folder=temp_dir,
-                    transparencies=[0.15],  # デフォルトの透過率
+                    transparency=transparency,  # デフォルトの透過率
                 )
 
                 # 処理後の画像を送信
