@@ -1,6 +1,6 @@
 import json, os
 from pathlib import Path
-from dotenv import load_dotenv
+from dotenv import load_dotenv # type: ignore
 
 class ConfigLoader:
     def __init__(self, base_dir="data"):
