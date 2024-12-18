@@ -6,8 +6,7 @@ __pycache__/
 .env
 
 # Temporary files and output
-temp/
-output/
+data/
 
 # OS-specific
 .DS_Store
@@ -15,3 +14,4 @@ Thumbs.db
 
 # Logs
 *.log
+

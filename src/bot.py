@@ -1,9 +1,11 @@
-import discord
+import discord # type: ignore
 import shutil  # ファイル削除用
+import logging
+import asyncio
 from pathlib import Path
-from discord.ext import commands
-from discord import app_commands
-from PIL import Image
+from discord.ext import commands # type: ignore
+from discord import app_commands # type: ignore
+from PIL import Image # type: ignore
 from utils.config_loader import load_env, ensure_base_dir, ConfigLoader
 from utils.watermark_processor import process_images
 
@@ -34,12 +36,19 @@ BASE_DIR = ensure_base_dir(env["BASE_DIR"])
 # Initialize ConfigLoader
 config_loader = ConfigLoader(BASE_DIR)
 
+# Initialize logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 # Set up intents and bot instance
 intents = discord.Intents.default()
 intents.messages = True       # メッセージ関連Intentを有効化
 intents.message_content = True  # メッセージ内容Intentを有効化
 intents.guilds = True  # サーバー情報の取得を有効化
 
+# lock instance
+lock = asyncio.Lock()
+
+# bot insntance
 bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
 @bot.event
@@ -118,15 +127,20 @@ async def upload_watermark(ctx):
 async def show_watermark(ctx):
     server_id = ctx.guild.id
     channel_id = ctx.channel.id
-    channel_settings = config_loader.get_channel_settings(server_id, channel_id)
+    try:
+        channel_settings = config_loader.get_channel_settings(server_id, channel_id)
+    except Exception as e:
+        await ctx.send(f"Error loading settings: {e}")
+        return
 
     active_watermark = channel_settings.get("active_watermark")
-    if active_watermark:
+    if active_watermark and Path(active_watermark).exists():
         file = discord.File(active_watermark, filename="watermark.png")
         await ctx.send("Current active watermark:", file=file)
     else:
         await ctx.send("No active watermark is set for this channel.")
-
+        # デバッグ用ログ
+        print(f"No active watermark for channel {server_id}/{channel_id}: {channel_settings}")
 
 @bot.command(aliases=['wm_clear', 'cw'])
 async def clear_watermark(ctx):
@@ -140,12 +154,17 @@ async def clear_watermark(ctx):
 # Pillowがサポートする拡張子一覧
 supported_extensions = list(Image.registered_extensions().keys())
 
+import asyncio
+
+lock = asyncio.Lock()  # ロックを作成
+
 @bot.event
 async def on_message(message):
     """
     メッセージが投稿された際にトリガーされるイベント。
     添付画像があればウォーターマークを適用し、返信として送信する。
     """
+
     # Bot自身のメッセージは無視
     if message.author.bot:
         return
@@ -161,66 +180,92 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
+    # サーバー情報とチャンネル情報を取得
     server_id = message.guild.id
     channel_id = message.channel.id
-    
-    # チャンネルごとのウォーターマークを取得
+
+    # チャンネル設定を取得
     channel_settings = config_loader.get_channel_settings(server_id, channel_id)
+
+    # チャンネルごとのウォーターマークを取得
     active_watermark = channel_settings.get("active_watermark")
 
+    # ウォーターマークが設定されていないチャンネルでは発動させない
     if not active_watermark:
-        await message.channel.send("No active watermark is set for this channel.")
-        await bot.process_commands(message)
+        # await message.channel.send("No active watermark is set for this channel.")
+        # await bot.process_commands(message)
         return
 
-    # 必要なディレクトリを定義
-    temp_dir = Path("temp")
-    error_files_dir = Path("logs/error_files")
-    temp_dir.mkdir(exist_ok=True)  # 一時ディレクトリ
-    error_files_dir.mkdir(parents=True, exist_ok=True)  # エラー用ディレクトリ
-
-    # 添付ファイルを保存してウォーターマーク処理
-    for attachment in message.attachments:
-        # 添付ファイルの拡張子を取得
-        extension = Path(attachment.filename).suffix.lower()
-
-        if extension not in supported_extensions:
-            await message.channel.send(f"Unsupported file type: {attachment.filename}")
-            continue
+    async with lock:  # ロックを取得して処理を直列化
+        # 必要なディレクトリを定義
+        temp_dir = Path("/data/temp")
+        error_files_dir = Path("/data/logs/error_files")
 
         try:
-            # 一時的な保存パス
-            input_path = temp_dir / attachment.filename
-            output_file_name = f"{attachment.filename.split('.')[0]}_15％{extension}" # 一時的に保存する出力先
-            output_path = temp_dir / output_file_name
+            temp_dir.mkdir(parents=True, exist_ok=True)  # 一時ディレクトリ
+            error_files_dir.mkdir(parents=True, exist_ok=True)  # エラー用ディレクトリ
 
-            # 添付ファイルを保存
-            await attachment.save(input_path)
+            # ディレクトリ作成成功のログ
+            logging.info(f"Temp directory created or exists: {temp_dir.resolve()}")
+            logging.info(f"Error files directory created or exists: {error_files_dir.resolve()}")
+        except Exception as dir_error:
+            logging.error(f"Failed to create directories: {dir_error}")
+            return
 
-            # ウォーターマークを適用
-            process_images(
-                base_image_path=str(input_path),
-                overlay_image_path=active_watermark,
-                output_folder=str(temp_dir),
-                transparencies=[0.15],  # デフォルトの透過率
-            )
+        # 添付ファイルを保存してウォーターマーク処理
+        for attachment in message.attachments:
+            # 添付ファイルの拡張子を取得
+            extension = Path(attachment.filename).suffix.lower()
 
-            # 処理後の画像を送信
-            await message.channel.send(file=discord.File(str(output_path)))
+            if extension not in supported_extensions:
+                await message.channel.send(f"Unsupported file type: {attachment.filename}")
+                continue
 
-            # 正常に処理できたら一時ファイルを削除
-            input_path.unlink(missing_ok=True)  # 元の添付ファイル
-            output_path.unlink(missing_ok=True)  # 処理後のファイル
+            try:
+                # 一時的な保存パス
+                input_path = temp_dir / attachment.filename
+                output_file_name = f"{attachment.filename.split('.')[0]}_15％{extension}" # 一時的に保存する出力先
+                output_path = temp_dir / output_file_name
 
-        except Exception as e:
-            # エラー時にファイルを保存
-            error_file_path = error_files_dir / attachment.filename
-            shutil.copy(input_path, error_file_path)  # エラー時に一時ファイルを保存
-            error_log_path = error_files_dir / "error_log.txt"
-            with open(error_log_path, "a") as log_file:
-                log_file.write(f"Error processing {attachment.filename}: {e}\n")
+                # 添付ファイルを保存
+                await attachment.save(input_path)
 
-            await message.channel.send(f"An error occurred while processing {attachment.filename}: {e}")
+                # 保存後に存在確認とログ出力
+                if input_path.exists():
+                    logging.info(f"File exists and is accessible: {input_path.resolve()}")
+                else:
+                    logging.error(f"File is not accessible: {input_path.resolve()}")
+                    raise FileNotFoundError(f"File was not saved: {input_path}")
+
+                logging.info(f"Base image path passed to process_images: {input_path}")
+                logging.info(f"Overlay image path passed to process_images: {Path(active_watermark)}")
+
+                # ウォーターマークを適用
+                process_images(
+                    base_image_path=input_path,
+                    overlay_image_path=Path(active_watermark),
+                    output_folder=temp_dir,
+                    transparencies=[0.15],  # デフォルトの透過率
+                )
+
+                # 処理後の画像を送信
+                await message.channel.send(file=discord.File(str(output_path)))
+
+                # 正常に処理できたら一時ファイルを削除
+                input_path.unlink(missing_ok=True)  # 元の添付ファイル
+                output_path.unlink(missing_ok=True)  # 処理後のファイル
+
+            except FileNotFoundError as fnf_error:
+                await message.channel.send(f"File not found error: {fnf_error}")
+                error_log_path = error_files_dir / "error_log.txt"
+                with open(error_log_path, "a") as log_file:
+                    log_file.write(f"FileNotFoundError: {fnf_error}\n")
+
+            except Exception as e:
+                await message.channel.send(f"An error occurred: {e}")
+                error_log_path = error_files_dir / "error_log.txt"
+                with open(error_log_path, "a") as log_file:
+                    log_file.write(f"Unexpected error: {e}\n")
 
     # 他のコマンドが処理されるようにする
     await bot.process_commands(message)

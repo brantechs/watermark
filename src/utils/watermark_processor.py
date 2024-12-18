@@ -1,15 +1,14 @@
-from PIL import Image
-import imageio.v3 as iio
-import os
+from PIL import Image  # type: ignore
+import imageio.v3 as iio  # type: ignore
 from pathlib import Path
-import numpy as np
+import numpy as np  # type: ignore
 
 # ファイル拡張子を判定する関数
-def get_file_extension(file_path):
-    return os.path.splitext(file_path)[1].lower()
+def get_file_extension(file_path: Path) -> str:
+    return file_path.suffix.lower()
 
 # オーバーレイ処理を行う関数
-def overlay_images(base_frame, overlay_image, transparency):
+def overlay_images(base_frame: Image.Image, overlay_image: Image.Image, transparency: float) -> Image.Image:
     """
     透過情報を考慮しながらウォーターマークを重ねる。
     - 元の透過部分にはウォーターマークを適用しない。
@@ -36,7 +35,7 @@ def overlay_images(base_frame, overlay_image, transparency):
     return combined
 
 # gifのフレーム数を正確に判定し、各フレームを返す関数
-def get_gif_frames(image):
+def get_gif_frames(image: Image.Image) -> list[Image.Image]:
     frames = []
     try:
         while True:
@@ -47,23 +46,24 @@ def get_gif_frames(image):
     return frames
 
 # メイン処理
-def process_images(base_image_path, overlay_image_path, output_folder, transparencies=[0.15]):
+def process_images(base_image_path: Path, overlay_image_path: Path, output_folder: Path, transparencies=[0.15]):
     """
     入力画像にウォーターマークを適用し、指定されたフォルダに保存する。
     """
-    if not os.path.exists(base_image_path):
-        raise FileNotFoundError(f"Base image not found: {base_image_path}")
-    if not os.path.exists(overlay_image_path):
-        raise FileNotFoundError(f"Overlay image not found: {overlay_image_path}")
+    if not base_image_path.exists():
+        raise FileNotFoundError(f"Base image not found: {base_image_path.resolve()}")
+    if not overlay_image_path.exists():
+        raise FileNotFoundError(f"Overlay image not found: {overlay_image_path.resolve()}")
 
-    os.makedirs(output_folder, exist_ok=True)
+    output_folder.mkdir(parents=True, exist_ok=True)
 
-    base_name, ext = os.path.splitext(os.path.basename(base_image_path))
+    base_name = base_image_path.stem
+    ext = base_image_path.suffix.lower()
     base_image = Image.open(base_image_path)
     overlay_image = Image.open(overlay_image_path).convert("RGBA")
     overlay_image = overlay_image.resize(base_image.size, Image.Resampling.LANCZOS)
 
-    if ext.lower() in [".gif", ".png"] and getattr(base_image, "is_animated", False):
+    if ext in [".gif", ".png"] and getattr(base_image, "is_animated", False):
         for transparency in transparencies:
             frames = get_gif_frames(base_image)
             processed_frames = []
@@ -73,13 +73,13 @@ def process_images(base_image_path, overlay_image_path, output_folder, transpare
                 combined_frame = overlay_images(base_frame, overlay_image, transparency)
                 processed_frames.append(np.array(combined_frame))
 
-            output_file_path = os.path.join(output_folder, f"{base_name}_{int(transparency * 100)}％{ext}")
+            output_file_path = output_folder / f"{base_name}_{int(transparency * 100)}％{ext}"
             iio.imwrite(
-                output_file_path,
+                str(output_file_path),
                 processed_frames,
                 duration=base_image.info.get("duration", 100),
                 loop=base_image.info.get("loop", 0),
-                plugin="pillow" if ext.lower() == ".png" else None
+                plugin="pillow" if ext == ".png" else None
             )
     else:
         base_frame = base_image.convert("RGBA")
@@ -87,11 +87,14 @@ def process_images(base_image_path, overlay_image_path, output_folder, transpare
             combined_image = overlay_images(base_frame, overlay_image, transparency)
 
             # 保存前に非透過形式の場合はRGBに変換
-            if ext.lower() in [".jpg", ".jpeg", ".bmp"]:
+            if ext in [".jpg", ".jpeg", ".bmp"]:
                 print(f"Converting image to RGB for format: {ext}")
                 combined_image = combined_image.convert("RGB")
 
             # 出力ファイルを保存
-            output_image_path = os.path.join(output_folder, f"{base_name}_{int(transparency * 100)}％{ext}")
-            print(f"Saving image to: {output_image_path}")
-            combined_image.save(output_image_path)
+            output_image_path = output_folder / f"{base_name}_{int(transparency * 100)}％{ext}"
+            try:
+                print(f"Saving image to: {output_image_path}")
+                combined_image.save(output_image_path)
+            except Exception as e:
+                raise IOError(f"Failed to save image: {output_image_path}. Error: {e}")
