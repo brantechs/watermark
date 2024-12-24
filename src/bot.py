@@ -7,7 +7,8 @@ from discord.ext import commands # type: ignore
 from discord import app_commands # type: ignore
 from PIL import Image # type: ignore
 from utils.config_loader import load_env, ensure_base_dir, ConfigLoader
-from utils.watermark_processor import process_images
+from utils.watermark_processor import process_images, overlay_images_strict
+
 
 # create watermark class
 class Watermark(commands.Cog):
@@ -297,7 +298,7 @@ async def on_message(message):
 
                 # 正常に処理できたら一時ファイルを削除
                 input_path.unlink(missing_ok=True)  # 元の添付ファイル
-                output_path.unlink(missing_ok=True)  # 処理後のファイル
+                # output_path.unlink(missing_ok=True)  # 処理後のファイル
 
             except FileNotFoundError as fnf_error:
                 await message.channel.send(f"File not found error: {fnf_error}")
