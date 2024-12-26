@@ -185,6 +185,20 @@ async def clear_watermark(ctx):
     config_loader.delete_channel_settings(server_id, channel_id)
     await ctx.send("Active watermark has been cleared.")
 
+@bot.command(aliases=['tos'])
+async def TermsofService(ctx):
+    tos_path = Path("ToS.md")
+    if tos_path.exists():
+        with open(tos_path, "r", encoding="utf-8") as file:
+            tos_content = file.read()
+        # Discord メッセージの最大文字数は2000文字
+        if len(tos_content) > 2000:
+            await ctx.send("The Terms of Service is too long to display in a single message. Please check the [Google Docs](https://docs.google.com/document/d/1iZ3O5GVKic53Ymi__KP3RHifNY6JNUdpG-048czEQH4/edit?usp=sharing) directly.")
+        else:
+            await ctx.send(tos_content)
+    else:
+        await ctx.send("Terms of Service file (ToS.md) not found in the project directory.")
+
 # Pillowがサポートする拡張子一覧
 supported_extensions = list(Image.registered_extensions().keys())
 
