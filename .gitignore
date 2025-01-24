@@ -10,6 +10,7 @@ __pycache__/
 # Temporary files and output
 data/src/*
 data/guilds/*
+data/temp/*
 tests/test_images/src/*
 tests/test_images/test_output/*
 
