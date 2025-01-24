@@ -7,8 +7,9 @@ services:
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - COMMAND_PREFIX=${COMMAND_PREFIX}
-      - PUID=1000
-      - PGID=1000
+      - PUID=${PUID} # ホストのユーザーIDを渡す
+      - PGID=${PGID} # ホストのグループIDを渡す
     volumes:
       - .:/app
     restart: always
+    user: "${PUID}:${PGID}" # ユーザーとグループをホスト側と一致させる
