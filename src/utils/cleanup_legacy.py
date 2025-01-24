@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-def cleanup_legacy_data(base_dir="data/src"):
+def cleanup_legacy_data(base_dir="data/guilds"):
     """
     Deletes legacy data stored in the old directory structure.
     """

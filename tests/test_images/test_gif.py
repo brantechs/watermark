@@ -46,7 +46,7 @@ def create_gif_with_fixed_palette(frames_folder: Path, output_gif_path: Path, du
         duration=durations,
         loop=0,
         transparency=transparency_index,
-        disposal=2,  # 前フレームを破棄
+        disposal=3,  # 前フレームを破棄
         optimize=False
     )
     print(f"GIFを生成しました: {output_gif_path}")

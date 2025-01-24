@@ -76,7 +76,7 @@ def load_env():
     return {
         "DISCORD_TOKEN": os.getenv("DISCORD_TOKEN"),
         "COMMAND_PREFIX": os.getenv("COMMAND_PREFIX", "/"),
-        "BASE_DIR": os.getenv("BASE_DIR", "data/src"),
+        # "BASE_DIR": os.getenv("BASE_DIR", "data/guilds"),
     }
 
 def ensure_base_dir(base_dir):
