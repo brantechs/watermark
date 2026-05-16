@@ -1,319 +1,408 @@
-import discord # type: ignore
-import shutil  # ファイル削除用
-import logging
+from __future__ import annotations
+
 import asyncio
+import logging
+import secrets
 from pathlib import Path
-from discord.ext import commands # type: ignore
-from discord import app_commands # type: ignore
-from PIL import Image # type: ignore
-from utils.config_loader import load_env, ensure_base_dir, ConfigLoader
+
+import discord  # type: ignore
+from discord import app_commands  # type: ignore
+from discord.ext import commands  # type: ignore
+from PIL import Image  # type: ignore
+
+from utils.config_loader import ConfigLoader, ensure_base_dir, load_env
 from utils.watermark_processor import process_images
 
-# create watermark class
-class Watermark(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-        self.watermark_group = app_commands.Group(name="watermark", description="Watermark related commands")
 
-    @app_commands.command(name="show", description="Show the active watermark")
-    async def show_watermark(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Showing watermark...")
+# ------------------------------------------------------------
+# Environment / paths
+# ------------------------------------------------------------
 
-    @app_commands.command(name="upload", description="Upload a new watermark")
-    async def upload_watermark(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Uploading watermark...")
-
-    @app_commands.command(name="clear", description="Clear the active watermark")
-    async def clear_watermark(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Clearing watermark...")
-
-# Load environment variables
 env = load_env()
+
 TOKEN = env["DISCORD_TOKEN"]
-PREFIX = env["COMMAND_PREFIX"]
 BASE_DIR = ensure_base_dir(env["BASE_DIR"])
 
-# Initialize ConfigLoader
+# BASE_DIR default is data/src, so temp becomes data/temp.
+TEMP_DIR = ensure_base_dir(str(BASE_DIR.parent / "temp"))
+ERROR_FILES_DIR = ensure_base_dir(str(BASE_DIR.parent / "logs" / "error_files"))
+
 config_loader = ConfigLoader(BASE_DIR)
 
-# Initialize logger
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+SUPPORTED_EXTENSIONS = set(Image.registered_extensions().keys())
 
-# Set up intents and bot instance
-intents = discord.Intents.default()
-intents.messages = True       # メッセージ関連Intentを有効化
-intents.message_content = True  # メッセージ内容Intentを有効化
-intents.guilds = True  # サーバー情報の取得を有効化
+DEFAULT_TRANSPARENCY = 15
 
-# lock instance
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+
 lock = asyncio.Lock()
 
-# bot insntance
-bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+
+def is_supported_image(filename: str) -> bool:
+    return Path(filename).suffix.lower() in SUPPORTED_EXTENSIONS
+
+
+def get_ids_from_interaction(interaction: discord.Interaction) -> tuple[int, int] | None:
+    if interaction.guild_id is None or interaction.channel_id is None:
+        return None
+    return interaction.guild_id, interaction.channel_id
+
+
+async def send_error_file_log(message: str) -> None:
+    ERROR_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    error_log_path = ERROR_FILES_DIR / "error_log.txt"
+    with open(error_log_path, "a", encoding="utf-8") as log_file:
+        log_file.write(f"{message}\n")
+
+
+def build_intro_message() -> str:
+    return (
+        "こんにちは！私は投稿された画像にウォーターマークを透過処理するBotです🤖\n\n"
+        "このBotは、チャンネルごとに設定された透かし画像を、投稿された画像へ自動合成します。\n\n"
+        "まずは `/wm set` で、このチャンネルに使う透かし画像を設定してください。\n"
+        "設定後、このチャンネルに画像を投稿すると、自動で透かし入り画像を返信します。\n\n"
+        "主なコマンド：\n"
+        "- `/wm set` : このチャンネルの透かし画像を設定・更新\n"
+        "- `/wm check` : 現在の設定を確認\n"
+        "- `/wm opacity` : 透過度を変更\n"
+        "- `/wm clear` : このチャンネルの設定を削除\n"
+        "- `/wm help` : 使い方を表示\n\n"
+        "⚠️ 透かし設定後は、このチャンネルに投稿された画像が自動加工されます。\n"
+        "Bot専用チャンネルを作ることを推奨します。"
+    )
+
+
+# ------------------------------------------------------------
+# Slash commands
+# ------------------------------------------------------------
+
+wm_group = app_commands.Group(
+    name="wm",
+    description="ウォーターマーク関連コマンド",
+)
+
+
+@wm_group.command(name="set", description="このチャンネルの透かし画像を設定・更新します")
+@app_commands.describe(
+    watermark="透かしとして使用する画像ファイル",
+    opacity="透過度。1〜100の整数。未指定の場合は現在値または初期値15を使用します",
+)
+async def wm_set(
+    interaction: discord.Interaction,
+    watermark: discord.Attachment,
+    opacity: int | None = None,
+):
+    ids = get_ids_from_interaction(interaction)
+    if ids is None:
+        await interaction.response.send_message(
+            "このコマンドはサーバー内のチャンネルで使用してください。",
+            ephemeral=True,
+        )
+        return
+
+    if not is_supported_image(watermark.filename):
+        await interaction.response.send_message(
+            f"サポートされていないファイル形式です: `{watermark.filename}`",
+            ephemeral=True,
+        )
+        return
+
+    if opacity is not None and not (1 <= opacity <= 100):
+        await interaction.response.send_message(
+            "透過度は 1〜100 の整数で指定してください。",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(thinking=True)
+
+    server_id, channel_id = ids
+    channel_dir = config_loader.get_server_dir(server_id) / str(channel_id)
+    channel_dir.mkdir(parents=True, exist_ok=True)
+
+    channel_settings = config_loader.get_channel_settings(server_id, channel_id)
+
+    # Remove old watermark file if exists.
+    old_watermark = channel_settings.get("active_watermark")
+    if old_watermark:
+        try:
+            Path(old_watermark).unlink(missing_ok=True)
+        except Exception as e:
+            logging.warning("Failed to remove old watermark: %s", e)
+
+    ext = Path(watermark.filename).suffix.lower()
+    saved_name = f"{secrets.token_hex(8)}{ext}"
+    watermark_path = channel_dir / saved_name
+
+    try:
+        await watermark.save(watermark_path)
+
+        # Verify that Pillow can open it as an image.
+        with Image.open(watermark_path) as img:
+            img.verify()
+
+    except Exception as e:
+        watermark_path.unlink(missing_ok=True)
+        await interaction.followup.send(
+            f"透かし画像の保存または検証に失敗しました: `{e}`",
+            ephemeral=True,
+        )
+        return
+
+    new_settings: dict[str, object] = {
+        "active_watermark": str(watermark_path),
+        "watermark_original_filename": watermark.filename,
+    }
+
+    if opacity is not None:
+        new_settings["transparency"] = opacity
+
+    config_loader.set_channel_settings(server_id, channel_id, new_settings)
+
+    applied_opacity = opacity or channel_settings.get("transparency", DEFAULT_TRANSPARENCY)
+
+    await interaction.followup.send(
+        "このチャンネルの透かし画像を設定しました。\n"
+        f"- ファイル名: `{watermark.filename}`\n"
+        f"- 透過度: `{applied_opacity}%`"
+    )
+
+
+@wm_group.command(name="check", description="このチャンネルの透かし設定を確認します")
+async def wm_check(interaction: discord.Interaction):
+    ids = get_ids_from_interaction(interaction)
+    if ids is None:
+        await interaction.response.send_message(
+            "このコマンドはサーバー内のチャンネルで使用してください。",
+            ephemeral=True,
+        )
+        return
+
+    server_id, channel_id = ids
+    channel_settings = config_loader.get_channel_settings(server_id, channel_id)
+
+    active_watermark = channel_settings.get("active_watermark")
+    opacity = channel_settings.get("transparency", DEFAULT_TRANSPARENCY)
+    original_filename = channel_settings.get("watermark_original_filename", "不明")
+
+    if not active_watermark or not Path(str(active_watermark)).exists():
+        await interaction.response.send_message(
+            "このチャンネルには透かし画像が設定されていません。\n"
+            "`/wm set` で透かし画像を設定してください。",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        "現在の透かし設定です。\n"
+        f"- 元ファイル名: `{original_filename}`\n"
+        f"- 透過度: `{opacity}%`",
+        file=discord.File(str(active_watermark), filename="watermark.png"),
+    )
+
+
+@wm_group.command(name="opacity", description="このチャンネルの透過度を変更します")
+@app_commands.describe(opacity="透過度。1〜100の整数")
+async def wm_opacity(interaction: discord.Interaction, opacity: int):
+    ids = get_ids_from_interaction(interaction)
+    if ids is None:
+        await interaction.response.send_message(
+            "このコマンドはサーバー内のチャンネルで使用してください。",
+            ephemeral=True,
+        )
+        return
+
+    if not (1 <= opacity <= 100):
+        await interaction.response.send_message(
+            "透過度は 1〜100 の整数で指定してください。",
+            ephemeral=True,
+        )
+        return
+
+    server_id, channel_id = ids
+    channel_settings = config_loader.get_channel_settings(server_id, channel_id)
+
+    if not channel_settings.get("active_watermark"):
+        await interaction.response.send_message(
+            "このチャンネルには透かし画像が設定されていません。\n"
+            "先に `/wm set` で透かし画像を設定してください。",
+            ephemeral=True,
+        )
+        return
+
+    config_loader.set_transparency(server_id, channel_id, opacity)
+
+    await interaction.response.send_message(
+        f"このチャンネルの透過度を `{opacity}%` に設定しました。"
+    )
+
+
+@wm_group.command(name="clear", description="このチャンネルの透かし設定を削除します")
+async def wm_clear(interaction: discord.Interaction):
+    ids = get_ids_from_interaction(interaction)
+    if ids is None:
+        await interaction.response.send_message(
+            "このコマンドはサーバー内のチャンネルで使用してください。",
+            ephemeral=True,
+        )
+        return
+
+    server_id, channel_id = ids
+    channel_settings = config_loader.get_channel_settings(server_id, channel_id)
+
+    active_watermark = channel_settings.get("active_watermark")
+    if active_watermark:
+        try:
+            Path(str(active_watermark)).unlink(missing_ok=True)
+        except Exception as e:
+            logging.warning("Failed to remove watermark file: %s", e)
+
+    config_loader.delete_channel_settings(server_id, channel_id)
+
+    await interaction.response.send_message(
+        "このチャンネルの透かし設定を削除しました。"
+    )
+
+
+@wm_group.command(name="help", description="Watermark Botの使い方を表示します")
+async def wm_help(interaction: discord.Interaction):
+    await interaction.response.send_message(build_intro_message(), ephemeral=True)
+
+
+# ------------------------------------------------------------
+# Bot events
+# ------------------------------------------------------------
+
+class WatermarkBot(commands.Bot):
+    async def setup_hook(self):
+        self.tree.add_command(wm_group)
+        await self.tree.sync()
+        logging.info("Slash commands synced.")
+
+
+intents = discord.Intents.default()
+intents.messages = True
+intents.message_content = True
+intents.guilds = True
+
+bot = WatermarkBot(command_prefix="!", intents=intents)
+
 
 @bot.event
 async def on_ready():
-    bot.tree.add_command(Watermark(bot).watermark_group)
-    await bot.tree.sync()
-    print("Watermark commands synced!")
+    logging.info("Logged in as %s", bot.user)
+
 
 @bot.event
-async def on_guild_join(guild):
-    """
-    新しいサーバーに追加されたときのイベント。
-    """
-    guide_message = (
-        "こんにちは！私は投稿された画像にウォーターマークを透過処理するBotです🤖\n"
-        "使い方は簡単！`/wm_set`と一緒にウォーターマークを設定した状態で、このチャンネルに画像ファイルを送るだけ！\n"
-        "以下のコマンドからお試しください：\n\n"
-        "📌 `/wm_set` - コマンドを送信する際にウォーターマークを一緒に送ってください！更新もこちら！\n"
-        "📌 `/wm_check` - 現在有効なウォーターマークを確認できます\n"
-        "📌 `/wm_clear` - 現在のウォーターマークを削除\n\n"
-        "チャンネルごとに異なるウォーターマークを設定できます\n"
-        "何か質問があれば、ぶらんちにお問い合わせください！"
-    )
+async def on_guild_join(guild: discord.Guild):
+    intro_message = build_intro_message()
 
-    # システムチャンネルがある場合はそこに送信
-    if guild.system_channel:  # デフォルトのシステムチャンネル
+    if guild.system_channel:
         try:
-            await guild.system_channel.send(guide_message)
+            await guild.system_channel.send(intro_message)
+            return
         except discord.Forbidden:
-            print(f"{guild.name}のシステムチャンネルにメッセージを送信できませんでした。")
-    else:
-        # 送信可能なテキストチャンネルを探す
-        for channel in guild.text_channels:
-            if channel.permissions_for(guild.me).send_messages:
-                try:
-                    await channel.send(guide_message)
-                    break
-                except discord.Forbidden:
-                    continue
+            logging.warning("%s のシステムチャンネルに送信できませんでした。", guild.name)
 
-@bot.command()
-async def hello(ctx):
-    await ctx.send("hello from discord")
+    for channel in guild.text_channels:
+        if channel.permissions_for(guild.me).send_messages:
+            try:
+                await channel.send(intro_message)
+                return
+            except discord.Forbidden:
+                continue
 
-@bot.command(aliases=['wm_set', 'uw'])
-async def upload_watermark(ctx):
-    if not ctx.message.attachments:
-        await ctx.send("Please attach an image to set as the watermark.")
-        return
-
-    attachment = ctx.message.attachments[0]
-    server_id = ctx.guild.id
-    channel_id = ctx.channel.id
-
-    # 保存パスの生成
-    channel_dir = config_loader.get_server_dir(server_id) / str(channel_id)
-    channel_dir.mkdir(parents=True, exist_ok=True)
-    watermark_path = channel_dir / attachment.filename
-
-    # 既存のウォーターマークを削除
-    channel_settings = config_loader.get_channel_settings(server_id, channel_id)
-    if "active_watermark" in channel_settings:
-        try:
-            Path(channel_settings["active_watermark"]).unlink()
-        except FileNotFoundError:
-            pass
-
-    # 新しいウォーターマークを保存
-    await attachment.save(watermark_path)
-
-    # 設定を更新
-    config_loader.set_channel_settings(server_id, channel_id, {"active_watermark": str(watermark_path)})
-    await ctx.send(f"Watermark uploaded and set to: {attachment.filename}")
-
-# 透過度を変更する関数
-@bot.command(aliases=['wm_settp'])
-async def set_watermark_transparency(ctx, transparency: int = None):
-    """
-    チャンネルごとの透過度を設定するコマンド
-    """
-    if transparency is None:
-        await ctx.send("Please specify a transparency value between 1 and 100. Example: `/wm_settp 50`.")
-        return
-
-    try:
-        # 引数を整数に変換
-        transparency = int(transparency)
-    except ValueError:
-        await ctx.send("Invalid transparency value. Please provide a valid number between 1 and 100.")
-        return
-
-    if not (1 <= transparency <= 100):
-        await ctx.send("Invalid transparency value. Please provide a number between 1 and 100.")
-        return
-
-    server_id = ctx.guild.id
-    channel_id = ctx.channel.id
-
-    try:
-        # 透過度を設定
-        await config_loader.set_transparency(server_id, channel_id, transparency)
-        await ctx.send(f"Transparency has been set to {transparency}% for this channel.")
-    except Exception as e:
-        await ctx.send(f"An error occurred while setting transparency: {e}")
-
-@bot.command(aliases=['wm_check', 'sw'])
-async def show_watermark(ctx):
-    server_id = ctx.guild.id
-    channel_id = ctx.channel.id
-    try:
-        channel_settings = config_loader.get_channel_settings(server_id, channel_id)
-    except Exception as e:
-        await ctx.send(f"Error loading settings: {e}")
-        return
-
-    active_watermark = channel_settings.get("active_watermark")
-    transparency = channel_settings.get("transparency", 15)  # デフォルト透過度
-
-    if active_watermark and Path(active_watermark).exists():
-        file = discord.File(active_watermark, filename="watermark.png")
-        await ctx.send(f"Current active watermark with transparency {transparency}:", file=file)
-    else:
-        await ctx.send("No active watermark is set for this channel.")
-        # デバッグ用ログ
-        print(f"No active watermark for channel : {channel_settings}")
-
-@bot.command(aliases=['wm_clear', 'cw'])
-async def clear_watermark(ctx):
-    server_id = ctx.guild.id
-    channel_id = ctx.channel.id
-
-    # 設定をクリア
-    config_loader.delete_channel_settings(server_id, channel_id)
-    await ctx.send("Active watermark has been cleared.")
-
-# Pillowがサポートする拡張子一覧
-supported_extensions = list(Image.registered_extensions().keys())
-
-import asyncio
-
-lock = asyncio.Lock()  # ロックを作成
-
-# 透過度を確認する関数
-async def set_transparency(server_id, channel_id, transparency):
-    """
-    チャンネル設定に透過度を保存
-    """
-    try:
-        config_loader.set_channel_settings(server_id, channel_id, {"transparency": transparency})
-    except Exception as e:
-        logging.error(f"Failed to set transparency: {e}")
 
 @bot.event
-async def on_message(message):
+async def on_message(message: discord.Message):
     """
-    メッセージが投稿された際にトリガーされるイベント。
-    添付画像があればウォーターマークを適用し、返信として送信する。
+    添付画像が投稿された際、チャンネル設定に応じて透かしを適用する。
+    スラッシュコマンドは on_message では処理しない。
     """
 
-    # Bot自身のメッセージは無視
     if message.author.bot:
         return
 
-    # プレフィックスコマンドが存在する場合はスキップして処理
-    if message.content.startswith(PREFIX):
-        await bot.process_commands(message)
+    if message.guild is None:
         return
 
-    # メッセージに添付ファイルがあるか確認
     if not message.attachments:
-        # 他のコマンドが処理されるようにする
-        await bot.process_commands(message)
         return
 
-    # サーバー情報とチャンネル情報を取得
     server_id = message.guild.id
     channel_id = message.channel.id
 
-    # チャンネル設定を取得
     channel_settings = config_loader.get_channel_settings(server_id, channel_id)
-    transparency = channel_settings.get("transparency", 15)  / 100  # 透過率を0.0~1.0に変換
-
-    # チャンネルごとのウォーターマークを取得
     active_watermark = channel_settings.get("active_watermark")
 
-    # ウォーターマークが設定されていないチャンネルでは発動させない
     if not active_watermark:
-        # await message.channel.send("No active watermark is set for this channel.")
-        # await bot.process_commands(message)
         return
 
-    async with lock:  # ロックを取得して処理を直列化
-        # 必要なディレクトリを定義
-        temp_dir = Path("/data/temp")
-        error_files_dir = Path("/data/logs/error_files")
+    active_watermark_path = Path(str(active_watermark))
+    if not active_watermark_path.exists():
+        logging.warning("Configured watermark does not exist: %s", active_watermark_path)
+        return
 
-        try:
-            temp_dir.mkdir(parents=True, exist_ok=True)  # 一時ディレクトリ
-            error_files_dir.mkdir(parents=True, exist_ok=True)  # エラー用ディレクトリ
+    opacity = channel_settings.get("transparency", DEFAULT_TRANSPARENCY)
+    transparency = int(opacity) / 100
 
-            # ディレクトリ作成成功のログ
-            logging.info(f"Temp directory created or exists: {temp_dir.resolve()}")
-            logging.info(f"Error files directory created or exists: {error_files_dir.resolve()}")
-        except Exception as dir_error:
-            logging.error(f"Failed to create directories: {dir_error}")
-            return
+    supported_attachments = [
+        attachment
+        for attachment in message.attachments
+        if is_supported_image(attachment.filename)
+    ]
 
-        # 添付ファイルを保存してウォーターマーク処理
-        for attachment in message.attachments:
-            # 添付ファイルの拡張子を取得
-            extension = Path(attachment.filename).suffix.lower()
+    if not supported_attachments:
+        return
 
-            if extension not in supported_extensions:
-                await message.channel.send(f"Unsupported file type: {attachment.filename}")
-                continue
+    async with lock:
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+        for attachment in supported_attachments:
+            ext = Path(attachment.filename).suffix.lower()
+            input_path = TEMP_DIR / f"{secrets.token_hex(8)}{ext}"
 
             try:
-                # 一時的な保存パス
-                input_path = temp_dir / attachment.filename
-                output_file_name = f"{attachment.filename.split('.')[0]}_{str(int(transparency*100))}％{extension}" # 一時的に保存する出力先
-                output_path = temp_dir / output_file_name
-
-                # 添付ファイルを保存
                 await attachment.save(input_path)
 
-                # 保存後に存在確認とログ出力
-                if input_path.exists():
-                    logging.info(f"File exists and is accessible: {input_path.resolve()}")
-                else:
-                    logging.error(f"File is not accessible: {input_path.resolve()}")
-                    raise FileNotFoundError(f"File was not saved: {input_path}")
-
-                logging.info(f"Base image path passed to process_images: {input_path}")
-                logging.info(f"Overlay image path passed to process_images: {Path(active_watermark)}")
-
-                # ウォーターマークを適用
-                process_images(
+                output_path = process_images(
                     base_image_path=input_path,
-                    overlay_image_path=Path(active_watermark),
-                    output_folder=temp_dir,
-                    transparency=transparency,  # デフォルトの透過率
+                    overlay_image_path=active_watermark_path,
+                    output_folder=TEMP_DIR,
+                    transparency=transparency,
                 )
 
-                # 処理後の画像を送信
-                await message.channel.send(file=discord.File(str(output_path)))
+                send_filename = f"{Path(attachment.filename).stem}_wm{ext}"
+                await message.channel.send(
+                    file=discord.File(str(output_path), filename=send_filename)
+                )
 
-                # 正常に処理できたら一時ファイルを削除
-                input_path.unlink(missing_ok=True)  # 元の添付ファイル
-                output_path.unlink(missing_ok=True)  # 処理後のファイル
-
-            except FileNotFoundError as fnf_error:
-                await message.channel.send(f"File not found error: {fnf_error}")
-                error_log_path = error_files_dir / "error_log.txt"
-                with open(error_log_path, "a") as log_file:
-                    log_file.write(f"FileNotFoundError: {fnf_error}\n")
+                input_path.unlink(missing_ok=True)
+                output_path.unlink(missing_ok=True)
 
             except Exception as e:
-                await message.channel.send(f"An error occurred: {e}")
-                error_log_path = error_files_dir / "error_log.txt"
-                with open(error_log_path, "a") as log_file:
-                    log_file.write(f"Unexpected error: {e}\n")
+                logging.exception("Failed to process attachment: %s", attachment.filename)
+                await send_error_file_log(
+                    f"Unexpected error: attachment={attachment.filename}, error={e}"
+                )
+                await message.channel.send(
+                    f"画像処理中にエラーが発生しました: `{attachment.filename}`"
+                )
 
-    # 他のコマンドが処理されるようにする
-    await bot.process_commands(message)
 
-# Run the bot
+# ------------------------------------------------------------
+# Run
+# ------------------------------------------------------------
+
 if __name__ == "__main__":
+    if not TOKEN:
+        raise RuntimeError("DISCORD_TOKEN is not set.")
+
     bot.run(TOKEN)

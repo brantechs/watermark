@@ -1,88 +1,95 @@
-import json, os
+from __future__ import annotations
+
+import json
+import os
 from pathlib import Path
-from dotenv import load_dotenv # type: ignore
+from typing import Any
+
+from dotenv import load_dotenv  # type: ignore
+
 
 class ConfigLoader:
-    def __init__(self, base_dir="data"):
+    def __init__(self, base_dir: str | Path = "data/src"):
         self.base_dir = Path(base_dir)
-        self.base_dir.mkdir(exist_ok=True)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_server_dir(self, server_id):
+    def get_server_dir(self, server_id: int | str) -> Path:
         server_dir = self.base_dir / str(server_id)
         server_dir.mkdir(parents=True, exist_ok=True)
         return server_dir
 
-    def get_settings_file(self, server_id):
-        server_dir = self.get_server_dir(server_id)
-        return server_dir / "settings.json"
+    def get_settings_file(self, server_id: int | str) -> Path:
+        return self.get_server_dir(server_id) / "settings.json"
 
-    def load_server_settings(self, server_id):
+    def load_server_settings(self, server_id: int | str) -> dict[str, Any]:
         settings_file = self.get_settings_file(server_id)
+
         if not settings_file.exists():
             return {"channels": {}}
-        with open(settings_file, "r") as f:
-            return json.load(f)
 
-    def save_server_settings(self, server_id, settings):
+        with open(settings_file, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+
+        if not isinstance(settings, dict):
+            return {"channels": {}}
+
+        if "channels" not in settings or not isinstance(settings["channels"], dict):
+            settings["channels"] = {}
+
+        return settings
+
+    def save_server_settings(self, server_id: int | str, settings: dict[str, Any]) -> None:
         settings_file = self.get_settings_file(server_id)
-        with open(settings_file, "w") as f:
-            json.dump(settings, f, indent=4)
 
-    def get_channel_settings(self, server_id, channel_id):
+        with open(settings_file, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=4, ensure_ascii=False)
+
+    def get_channel_settings(self, server_id: int | str, channel_id: int | str) -> dict[str, Any]:
         server_settings = self.load_server_settings(server_id)
         return server_settings["channels"].get(str(channel_id), {})
 
-    def set_channel_settings(self, server_id, channel_id, settings):
-        """
-        チャンネル設定を保存。既存の設定がある場合は上書きせず追記。
-        """
+    def set_channel_settings(
+        self,
+        server_id: int | str,
+        channel_id: int | str,
+        settings: dict[str, Any],
+    ) -> None:
         server_settings = self.load_server_settings(server_id)
         channel_settings = server_settings["channels"].get(str(channel_id), {})
 
-        # 既存の設定に新しい設定を更新
         channel_settings.update(settings)
-
-        # サーバー全体の設定を更新
         server_settings["channels"][str(channel_id)] = channel_settings
 
-        # 保存
         self.save_server_settings(server_id, server_settings)
 
-    def delete_channel_settings(self, server_id, channel_id):
+    def delete_channel_settings(self, server_id: int | str, channel_id: int | str) -> None:
         server_settings = self.load_server_settings(server_id)
+
         if str(channel_id) in server_settings["channels"]:
             del server_settings["channels"][str(channel_id)]
             self.save_server_settings(server_id, server_settings)
 
-    # 透過度のみを変更するメソッド
-    async def set_transparency(self, server_id, channel_id, transparency):
-        """
-        チャンネル設定に透過度を保存
-        """
+    def set_transparency(self, server_id: int | str, channel_id: int | str, transparency: int) -> None:
         if not isinstance(transparency, int) or not (1 <= transparency <= 100):
             raise ValueError("Transparency must be an integer between 1 and 100.")
-        
-        try:
-            self.set_channel_settings(server_id, channel_id, {"transparency": transparency})
-        except Exception as e:
-            raise RuntimeError(f"Failed to set transparency: {e}")
 
-    
-def load_env():
-    """
-    Load environment variables from a .env file and return them as a dictionary.
-    """
+        self.set_channel_settings(
+            server_id,
+            channel_id,
+            {"transparency": transparency},
+        )
+
+
+def load_env() -> dict[str, str | None]:
     load_dotenv()
+
     return {
         "DISCORD_TOKEN": os.getenv("DISCORD_TOKEN"),
-        "COMMAND_PREFIX": os.getenv("COMMAND_PREFIX", "/"),
         "BASE_DIR": os.getenv("BASE_DIR", "data/src"),
     }
 
-def ensure_base_dir(base_dir):
-    """
-    Ensure the base directory exists. Create it if it doesn't exist.
-    """
+
+def ensure_base_dir(base_dir: str | Path) -> Path:
     path = Path(base_dir)
     path.mkdir(parents=True, exist_ok=True)
     return path

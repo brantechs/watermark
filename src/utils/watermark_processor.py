@@ -1,100 +1,139 @@
-from PIL import Image  # type: ignore
-import imageio.v3 as iio  # type: ignore
+from __future__ import annotations
+
 from pathlib import Path
+
 import numpy as np  # type: ignore
+from PIL import Image, ImageSequence  # type: ignore
 
-# ファイル拡張子を判定する関数
-def get_file_extension(file_path: Path) -> str:
-    return file_path.suffix.lower()
 
-# オーバーレイ処理を行う関数
-def overlay_images(base_frame: Image.Image, overlay_image: Image.Image, transparency: float) -> Image.Image:
+def overlay_images(
+    base_frame: Image.Image,
+    overlay_image: Image.Image,
+    transparency: float,
+) -> Image.Image:
     """
-    透過情報を考慮しながらウォーターマークを重ねる。
-    - 元の透過部分にはウォーターマークを適用しない。
+    ベース画像へ透かし画像を合成する。
+    ベース画像の完全透過部分には透かしを乗せない。
     """
-    if "A" in base_frame.mode:
-        base_alpha = base_frame.split()[3]
-        base_alpha_np = np.array(base_alpha)
-        mask = base_alpha_np == 0  # 完全に透過している部分をマスク
+
+    base_rgba = base_frame.convert("RGBA")
+    overlay_rgba = overlay_image.convert("RGBA").resize(
+        base_rgba.size,
+        Image.Resampling.LANCZOS,
+    )
+
+    if "A" in base_rgba.mode:
+        base_alpha_np = np.array(base_rgba.getchannel("A"))
+        transparent_mask = base_alpha_np == 0
     else:
-        base_alpha = None
-        mask = None
+        transparent_mask = None
 
-    overlay_with_alpha = overlay_image.copy()
-    alpha = overlay_with_alpha.split()[3].point(lambda p: int(p * transparency))
-    overlay_with_alpha.putalpha(alpha)
+    overlay_with_alpha = overlay_rgba.copy()
+    overlay_alpha = overlay_with_alpha.getchannel("A").point(
+        lambda p: int(p * transparency)
+    )
+    overlay_with_alpha.putalpha(overlay_alpha)
 
-    if mask is not None:
-        overlay_with_alpha_np = np.array(overlay_with_alpha)
-        overlay_with_alpha_np[mask] = [0, 0, 0, 0]
-        overlay_with_alpha = Image.fromarray(overlay_with_alpha_np, "RGBA")
+    if transparent_mask is not None:
+        overlay_np = np.array(overlay_with_alpha)
+        overlay_np[transparent_mask] = [0, 0, 0, 0]
+        overlay_with_alpha = Image.fromarray(overlay_np, "RGBA")
 
-    combined = Image.alpha_composite(base_frame, overlay_with_alpha)
+    return Image.alpha_composite(base_rgba, overlay_with_alpha)
 
-    return combined
 
-# gifのフレーム数を正確に判定し、各フレームを返す関数
-def get_gif_frames(image: Image.Image) -> list[Image.Image]:
-    frames = []
-    try:
-        while True:
-            frames.append(image.copy())
-            image.seek(image.tell() + 1)
-    except EOFError:
-        pass
-    return frames
+def _build_output_path(
+    base_image_path: Path,
+    output_folder: Path,
+    transparency: float,
+) -> Path:
+    ext = base_image_path.suffix.lower()
+    opacity = int(transparency * 100)
+    return output_folder / f"{base_image_path.stem}_{opacity}pct{ext}"
 
-# メイン処理
-def process_images(base_image_path: Path, overlay_image_path: Path, output_folder: Path, transparency=0.15):
+
+def _save_static_image(
+    combined_image: Image.Image,
+    output_path: Path,
+    ext: str,
+) -> None:
+    if ext in {".jpg", ".jpeg", ".bmp"}:
+        combined_image = combined_image.convert("RGB")
+
+    combined_image.save(output_path)
+
+
+def _save_animated_image(
+    base_image: Image.Image,
+    overlay_image: Image.Image,
+    output_path: Path,
+    transparency: float,
+) -> None:
+    frames: list[Image.Image] = []
+    durations: list[int] = []
+
+    for frame in ImageSequence.Iterator(base_image):
+        duration = frame.info.get("duration", base_image.info.get("duration", 100))
+        durations.append(duration)
+
+        combined_frame = overlay_images(frame, overlay_image, transparency)
+        frames.append(combined_frame)
+
+    if not frames:
+        raise ValueError("No frames found in animated image.")
+
+    first_frame = frames[0]
+    append_frames = frames[1:]
+
+    first_frame.save(
+        output_path,
+        save_all=True,
+        append_images=append_frames,
+        duration=durations,
+        loop=base_image.info.get("loop", 0),
+        disposal=2,
+    )
+
+
+def process_images(
+    base_image_path: Path,
+    overlay_image_path: Path,
+    output_folder: Path,
+    transparency: float = 0.15,
+) -> Path:
     """
-    入力画像にウォーターマークを適用し、指定されたフォルダに保存する。
+    入力画像にウォーターマークを適用し、出力ファイルのパスを返す。
     """
+
+    base_image_path = Path(base_image_path)
+    overlay_image_path = Path(overlay_image_path)
+    output_folder = Path(output_folder)
+
     if not base_image_path.exists():
         raise FileNotFoundError(f"Base image not found: {base_image_path.resolve()}")
+
     if not overlay_image_path.exists():
         raise FileNotFoundError(f"Overlay image not found: {overlay_image_path.resolve()}")
 
+    if not (0 < transparency <= 1):
+        raise ValueError("transparency must be greater than 0 and less than or equal to 1.")
+
     output_folder.mkdir(parents=True, exist_ok=True)
 
-    base_name = base_image_path.stem
     ext = base_image_path.suffix.lower()
-    base_image = Image.open(base_image_path)
-    overlay_image = Image.open(overlay_image_path).convert("RGBA")
-    overlay_image = overlay_image.resize(base_image.size, Image.Resampling.LANCZOS)
+    output_path = _build_output_path(base_image_path, output_folder, transparency)
 
-    if ext in [".gif", ".png"] and getattr(base_image, "is_animated", False):
-        # アニメーションGIFまたはPNGの場合
-        frames = get_gif_frames(base_image)
-        processed_frames = []
+    with Image.open(base_image_path) as base_image:
+        with Image.open(overlay_image_path) as overlay_image:
+            if getattr(base_image, "is_animated", False):
+                _save_animated_image(
+                    base_image=base_image,
+                    overlay_image=overlay_image,
+                    output_path=output_path,
+                    transparency=transparency,
+                )
+            else:
+                combined_image = overlay_images(base_image, overlay_image, transparency)
+                _save_static_image(combined_image, output_path, ext)
 
-        for frame in frames:
-            base_frame = frame.convert("RGBA")
-            combined_frame = overlay_images(base_frame, overlay_image, transparency)
-            processed_frames.append(np.array(combined_frame))
-
-        output_file_path = output_folder / f"{base_name}_{int(transparency * 100)}％{ext}"
-        iio.imwrite(
-            str(output_file_path),
-            processed_frames,
-            duration=base_image.info.get("duration", 100),
-            loop=base_image.info.get("loop", 0),
-            plugin="pillow" if ext == ".png" else None
-        )
-    else:
-        # 静止画像の場合
-        base_frame = base_image.convert("RGBA")
-        combined_image = overlay_images(base_frame, overlay_image, transparency)
-
-        # 保存前に非透過形式の場合はRGBに変換
-        if ext in [".jpg", ".jpeg", ".bmp"]:
-            print(f"Converting image to RGB for format: {ext}")
-            combined_image = combined_image.convert("RGB")
-
-        # 出力ファイルを保存
-        output_image_path = output_folder / f"{base_name}_{int(transparency * 100)}％{ext}"
-        try:
-            print(f"Saving image to: {output_image_path}")
-            combined_image.save(output_image_path)
-        except Exception as e:
-            raise IOError(f"Failed to save image: {output_image_path}. Error: {e}")
+    return output_path
