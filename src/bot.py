@@ -11,7 +11,7 @@ from discord.ext import commands  # type: ignore
 from PIL import Image  # type: ignore
 
 from utils.config_loader import ConfigLoader, ensure_base_dir, load_env
-from utils.watermark_processor import process_images
+from utils.watermark_processor import process_images, shrink_to_fit
 
 
 # ------------------------------------------------------------
@@ -39,6 +39,8 @@ SUPPORTED_EXTENSIONS = {
 }
 
 DEFAULT_TRANSPARENCY = 15
+
+UPLOAD_LIMIT_MARGIN = 0.95
 
 logging.basicConfig(
     level=logging.INFO,
@@ -388,20 +390,29 @@ async def on_message(message: discord.Message):
                 )
 
                 # 合成後のファイルがサーバーのアップロード上限を超えると
-                # Discord 側で 413 (error code 40005) になるため送信前に確認する。
-                size_limit = message.guild.filesize_limit
-                output_size = output_path.stat().st_size
-                if output_size > size_limit:
-                    await send_error_file_log(
-                        f"Output too large: attachment={attachment.filename}, "
-                        f"size={output_size}, limit={size_limit}"
+                # Discord 側で 413 (error code 40005) になるため、上限内に収まるよう縮小する。
+                # multipart のオーバーヘッド分の余裕を持たせる。
+                size_limit = int(message.guild.filesize_limit * UPLOAD_LIMIT_MARGIN)
+                original_size = output_path.stat().st_size
+                if original_size > size_limit:
+                    fitted = await asyncio.to_thread(shrink_to_fit, output_path, size_limit)
+                    logging.info(
+                        "Resized output: attachment=%s, %d -> %d bytes (limit %d)",
+                        attachment.filename,
+                        original_size,
+                        output_path.stat().st_size,
+                        size_limit,
                     )
-                    await message.channel.send(
-                        f"加工後の画像がこのサーバーのアップロード上限を超えたため送信できません: "
-                        f"`{attachment.filename}` "
-                        f"({output_size / 1024 / 1024:.1f}MB > 上限 {size_limit / 1024 / 1024:.1f}MB)"
-                    )
-                    continue
+                    if not fitted:
+                        await send_error_file_log(
+                            f"Output too large after resize: attachment={attachment.filename}, "
+                            f"size={output_path.stat().st_size}, limit={size_limit}"
+                        )
+                        await message.channel.send(
+                            f"加工後の画像を縮小してもアップロード上限に収まりませんでした: "
+                            f"`{attachment.filename}`"
+                        )
+                        continue
 
                 send_filename = f"{Path(attachment.filename).stem}_wm{ext}"
                 await message.channel.send(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np  # type: ignore
@@ -93,6 +94,57 @@ def _save_animated_image(
         loop=base_image.info.get("loop", 0),
         disposal=2,
     )
+
+
+def _resize_image_file(path: Path, scale: float) -> None:
+    frames: list[Image.Image] = []
+    durations: list[int] = []
+
+    with Image.open(path) as image:
+        new_size = (
+            max(1, int(image.width * scale)),
+            max(1, int(image.height * scale)),
+        )
+        loop = image.info.get("loop", 0)
+
+        for frame in ImageSequence.Iterator(image):
+            durations.append(frame.info.get("duration", image.info.get("duration", 100)))
+            frames.append(frame.convert("RGBA").resize(new_size, Image.Resampling.LANCZOS))
+
+    if len(frames) > 1:
+        frames[0].save(
+            path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=durations,
+            loop=loop,
+            disposal=2,
+        )
+        return
+
+    _save_static_image(frames[0], path, path.suffix.lower())
+
+
+def shrink_to_fit(path: Path, max_bytes: int, max_attempts: int = 6) -> bool:
+    """
+    ファイルサイズが max_bytes 以下になるまで縦横比を保って縮小する。
+    透かし入り画像の共有が目的のため、画質より送信できることを優先する。
+    収まった場合 True を返す。
+    """
+
+    path = Path(path)
+
+    for _ in range(max_attempts):
+        size = path.stat().st_size
+        if size <= max_bytes:
+            return True
+
+        # ファイルサイズはおおむね画素数に比例するため、面積比の平方根で縮小し、
+        # 圧縮効率のばらつきを見込んで少し余分に縮める。
+        scale = min(math.sqrt(max_bytes / size) * 0.9, 0.9)
+        _resize_image_file(path, scale)
+
+    return path.stat().st_size <= max_bytes
 
 
 def process_images(
