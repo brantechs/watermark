@@ -29,7 +29,14 @@ ERROR_FILES_DIR = ensure_base_dir(str(BASE_DIR.parent / "logs" / "error_files"))
 
 config_loader = ConfigLoader(BASE_DIR)
 
-SUPPORTED_EXTENSIONS = set(Image.registered_extensions().keys())
+# registered_extensions() には保存専用形式(.pdf 等)も含まれるため、
+# Pillow が読み込める形式(Image.OPEN に登録済み)に限定する。
+Image.init()
+SUPPORTED_EXTENSIONS = {
+    ext
+    for ext, fmt in Image.registered_extensions().items()
+    if fmt in Image.OPEN
+}
 
 DEFAULT_TRANSPARENCY = 15
 
@@ -368,6 +375,7 @@ async def on_message(message: discord.Message):
         for attachment in supported_attachments:
             ext = Path(attachment.filename).suffix.lower()
             input_path = TEMP_DIR / f"{secrets.token_hex(8)}{ext}"
+            output_path: Path | None = None
 
             try:
                 await attachment.save(input_path)
@@ -379,13 +387,26 @@ async def on_message(message: discord.Message):
                     transparency=transparency,
                 )
 
+                # 合成後のファイルがサーバーのアップロード上限を超えると
+                # Discord 側で 413 (error code 40005) になるため送信前に確認する。
+                size_limit = message.guild.filesize_limit
+                output_size = output_path.stat().st_size
+                if output_size > size_limit:
+                    await send_error_file_log(
+                        f"Output too large: attachment={attachment.filename}, "
+                        f"size={output_size}, limit={size_limit}"
+                    )
+                    await message.channel.send(
+                        f"加工後の画像がこのサーバーのアップロード上限を超えたため送信できません: "
+                        f"`{attachment.filename}` "
+                        f"({output_size / 1024 / 1024:.1f}MB > 上限 {size_limit / 1024 / 1024:.1f}MB)"
+                    )
+                    continue
+
                 send_filename = f"{Path(attachment.filename).stem}_wm{ext}"
                 await message.channel.send(
                     file=discord.File(str(output_path), filename=send_filename)
                 )
-
-                input_path.unlink(missing_ok=True)
-                output_path.unlink(missing_ok=True)
 
             except Exception as e:
                 logging.exception("Failed to process attachment: %s", attachment.filename)
@@ -395,6 +416,12 @@ async def on_message(message: discord.Message):
                 await message.channel.send(
                     f"画像処理中にエラーが発生しました: `{attachment.filename}`"
                 )
+
+            finally:
+                # 失敗時も一時ファイルを残さない。
+                input_path.unlink(missing_ok=True)
+                if output_path is not None:
+                    output_path.unlink(missing_ok=True)
 
 
 # ------------------------------------------------------------
