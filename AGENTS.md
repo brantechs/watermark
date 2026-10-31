@@ -18,5 +18,5 @@
 - 開発中に書いたテストは test-case master に登録して捨てない。既存テストの削除・skip 化は棚卸でのみ行う。
 - 人間がプロンプトで与えた指示・判断・訂正・却下は `docs/development/dev-intent/<ticket-id>.md` に証跡として残し、読み取った意図を試験へ結ぶ。
 - 既存の開発思想・設計原則と異なる観点が必要になったら STOP し、設計者(明記がなければ devuser)に問い合わせてから進める。
-- 作業開始時に `scripts/install-githooks.sh` を1回実行する(pre-commit で `scripts/qa-gate.sh` が DRBFM・開発意図ログ・evidence・test-case master の有無とテスト削除なしを判定)。commit 前に `scripts/qa-gate.sh change --write` を通す。`--no-verify` は使わない。
+- 作業開始時に `scripts/install-githooks.sh` を1回実行する(pre-commit で `scripts/qa-gate.sh` が DRBFM・開発意図ログ・evidence・test-case master の有無とテスト削除なしを判定)。コード確定後に `/security-review`(Codex は SQA `prompts/security-review.md`)→ `docs/development/evidence/<ticket>/security-review.md` → `scripts/qa-gate.sh security-stamp`、commit 前に `scripts/qa-gate.sh change --write` を通す。`--no-verify` は使わない。
 - 手順・テンプレート・チェックリストは `brantechs/SQA`(`checklists/change-test-gate.md` / `checklists/pre-major-test-inventory.md`)。
