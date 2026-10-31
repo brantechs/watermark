@@ -51,6 +51,18 @@
 11. commit → devuser が push / PR
 ```
 
+### 4.1 機械チェック(qa-gate)
+
+成果物の有無は `scripts/qa-gate.sh` が自動判定する。clone ごとに `scripts/install-githooks.sh` を1回実行すると pre-commit で `qa-gate.sh change --staged` が走り、CI(`.github/workflows/qa-gate.yml`)は PR で `change`、`v*.0.0` タグで `major` を実行してレポートを artifact に残す。
+
+```text
+change : コード変更を含む差分に DRBFM(version_tier)/ dev-intent/<ticket>.md / evidence/<ticket>/ / test-case master 差分 があり、
+         既存テストの削除・skip 化がないこと。docs のみの変更は対象外
+major  : test-inventory/intent-register.md(gap 行なし)/ <date>-v<MAJOR>-inventory.md / evidence/v<MAJOR>.0.0/ / release-judgement
+```
+
+WIP で一時的に通すときは `QA_GATE_SKIP=1 git commit`(CI では通らない)。`--no-verify` は使わない。判定の対応表は SQA `docs/development/qa-gate-automation.md`。中身の質は機械チェックの対象外で、change-test-gate を人間・高級モデルが読んで埋める。
+
 ## 5. 試験資産の積み上げ
 
 - 実装中に書いたテスト・再現スクリプト・確認手順は、チケット完了時に test-case master へ登録する。登録しないものは `docs/development/test-cases/artifacts/<ticket>/` に理由付きで残す。
@@ -90,4 +102,5 @@
 ## 8. 関連
 
 - SQA 正本: `docs/development/test-asset-lifecycle-policy.md`、`checklists/change-test-gate.md`、`checklists/pre-major-test-inventory.md`、`prompts/test-intent-distill.md`、`templates/dev-intent-log.md`、`templates/test-intent-register.md`、`templates/test-inventory-report.md`
+- 機械チェック: `scripts/qa-gate.sh`、`scripts/install-githooks.sh`、`.githooks/pre-commit`、`.github/workflows/qa-gate.yml`
 - 本 repo: [dev-intent/](dev-intent/README.md)(開発意図ログ)、[test-inventory/](test-inventory/README.md)(試験観点台帳・棚卸報告)
