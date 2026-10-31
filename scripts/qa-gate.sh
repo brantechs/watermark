@@ -170,7 +170,8 @@ echo; if [ "$FAIL" = 0 ]; then echo "QA GATE: PASS"; else echo "QA GATE: FAIL (�
 if [ "$WRITE" = 1 ] && [ "$MODE" = "change" ]; then
   local_dir="docs/development/evidence/$TICKET"; mkdir -p "$local_dir"
   out="$local_dir/qa-gate.md"
-  { echo "## qa-gate $(date +%Y-%m-%d) ($(git rev-parse --short HEAD 2>/dev/null)) — $([ "$FAIL" = 0 ] && echo PASS || echo FAIL)"; echo; printf -- '- %s\n' "${REPORT[@]}"; echo; } >> "$out"
+  # 区切りの空行は追記時に先頭へ置く(末尾空行を残すと git diff --check が "new blank line at EOF" を出す)
+  { [ -s "$out" ] && echo; echo "## qa-gate $(date +%Y-%m-%d) ($(git rev-parse --short HEAD 2>/dev/null)) — $([ "$FAIL" = 0 ] && echo PASS || echo FAIL)"; echo; printf -- '- %s\n' "${REPORT[@]}"; } >> "$out"
   echo "report appended: $out"
 fi
 exit "$FAIL"
