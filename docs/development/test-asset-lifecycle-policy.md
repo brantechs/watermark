@@ -57,7 +57,7 @@
 
 ```text
 change : コード変更を含む差分に DRBFM(version_tier)/ dev-intent/<ticket>.md / evidence/<ticket>/ / test-case master 差分 があり、
-         既存テストの削除・skip 化がないこと。docs のみの変更は対象外
+         既存テストの削除・skip 化がないこと。docs と gate 基盤(`.githooks/` `.github/` `scripts/qa-gate.sh` `scripts/install-githooks.sh`)のみの変更は対象外
 major  : test-inventory/intent-register.md(gap 行なし)/ <date>-v<MAJOR>-inventory.md / evidence/v<MAJOR>.0.0/ / release-judgement
 ```
 

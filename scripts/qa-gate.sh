@@ -59,7 +59,8 @@ derive_ticket() {
 [ -n "$TICKET" ] || TICKET="$(derive_ticket "$BRANCH")"
 
 TEST_PATH_RE='(^|/)(tests?|__tests__|e2e|spec)/|(^|/)test_[^/]*\.py$|_test\.(py|go|rs)$|\.(spec|test)\.(ts|tsx|js|jsx|mjs|cjs)$'
-DOCS_ONLY_RE='^(docs|checklists|prompts|snippets)/|\.(md|txt)$|^LICENSE'
+# docs と gate 基盤(hook / CI 設定 / qa-gate 自身)はプロダクトコードではないので gate 対象外
+DOCS_ONLY_RE='^(docs|checklists|prompts|snippets)/|\.(md|txt)$|^LICENSE|^\.githooks/|^\.github/|^scripts/(qa-gate|install-githooks)\.sh$'
 SKIP_MARK_RE='pytest\.mark\.(skip|xfail)|@unittest\.skip|unittest\.SkipTest|\b(it|test|describe)\.skip\(|\b(xit|xtest|xdescribe)\(|@pytest\.mark\.skipif|#\[ignore\]'
 
 # ---------- change ----------
@@ -101,7 +102,7 @@ run_change() {
   fi
 
   if [ -z "$code_files" ]; then
-    pass "docs のみの変更: DRBFM / evidence の gate 対象外"
+    pass "docs / gate 基盤のみの変更: DRBFM / evidence の gate 対象外"
     return
   fi
   note "コード変更 $(echo "$code_files" | wc -l) ファイル(例: $(echo "$code_files" | head -3 | tr '\n' ' '))"
