@@ -1,0 +1,43 @@
+name: qa-gate
+
+on:
+  pull_request:
+  push:
+    tags:
+      - "v*.0.0"
+
+permissions:
+  contents: read
+
+jobs:
+  change-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Run change gate (DRBFM / dev-intent / evidence / test-case master / no test removal)
+        run: |
+          chmod +x scripts/qa-gate.sh
+          scripts/qa-gate.sh change --base "origin/${{ github.base_ref }}" --branch "${{ github.head_ref }}" | tee qa-gate-report.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-gate-report
+          path: qa-gate-report.txt
+  major-gate:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run major gate (test inventory / full-test evidence / release judgement)
+        run: |
+          chmod +x scripts/qa-gate.sh
+          scripts/qa-gate.sh major --version "${GITHUB_REF_NAME}" | tee qa-gate-report.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-gate-report-${{ github.ref_name }}
+          path: qa-gate-report.txt

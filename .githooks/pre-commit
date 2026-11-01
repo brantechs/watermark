@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# pre-commit: 試験資産ライフサイクル方針の機械チェック(index + ブランチ差分)
+# 有効化: scripts/install-githooks.sh(core.hooksPath=.githooks)
+# WIP で一時的に通す: QA_GATE_SKIP=1 git commit ...(CI の PR gate では通らない)
+ROOT="$(git rev-parse --show-toplevel)"
+[ -x "$ROOT/scripts/qa-gate.sh" ] || exit 0
+exec "$ROOT/scripts/qa-gate.sh" change --staged
