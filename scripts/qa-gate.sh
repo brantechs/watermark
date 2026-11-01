@@ -70,11 +70,13 @@ if [ "$MODE" != "code-digest" ] && ! [[ "$TICKET" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*
 fi
 
 TEST_PATH_RE='(^|/)(tests?|__tests__|e2e|spec)/|(^|/)test_[^/]*\.py$|_test\.(py|go|rs)$|\.(spec|test)\.(ts|tsx|js|jsx|mjs|cjs)$'
-# docs と gate 基盤(hook / CI 設定 / qa-gate 自身)はプロダクトコードではないので gate 対象外
-DOCS_ONLY_RE='^(docs|checklists|prompts|snippets)/|\.(md|txt)$|^LICENSE|^\.githooks/|^\.github/|^scripts/(qa-gate|install-githooks)\.sh$'
+# docs と gate 基盤(hook / CI 設定 / qa-gate 自身)、lint / formatter の設定ファイルはプロダクトコードではないので gate 対象外
+# (pyproject.toml は依存も持つので対象。ruff の設定を固定するときは ruff.toml に書く)
+DOCS_ONLY_RE='^(docs|checklists|prompts|snippets)/|\.(md|txt)$|^LICENSE|^\.githooks/|^\.github/|^scripts/(qa-gate|install-githooks)\.sh$|^(ruff|\.ruff)\.toml$|^\.editorconfig$|^\.(prettierrc|eslintrc)(\.[a-z]+)?$|^eslint\.config\.[cm]?js$|^\.flake8$|^mypy\.ini$'
 # セキュリティレビューの鮮度 digest からは docs だけを除く。gate 基盤(hook / CI 設定 / qa-gate 自身)は commit ごとに実行されるコードなので、
 # レビュー後に書き換えられたら「古い」と判定させる(artifact 要求の対象外でも digest には含める)
-DIGEST_EXCLUDE_RE='^(docs|checklists|prompts|snippets)/|\.(md|txt)$|^LICENSE'
+# 実行されない lint / formatter の設定(toml / ini / json / yaml)も digest から除く。eslint.config.*js は JS なので含める
+DIGEST_EXCLUDE_RE='^(docs|checklists|prompts|snippets)/|\.(md|txt)$|^LICENSE|^(ruff|\.ruff)\.toml$|^\.editorconfig$|^\.flake8$|^mypy\.ini$|^\.(prettierrc|eslintrc)(\.(json|yaml|yml|toml))?$'
 SKIP_MARK_RE='pytest\.mark\.(skip|xfail)|@unittest\.skip|unittest\.SkipTest|\b(it|test|describe)\.skip\(|\b(xit|xtest|xdescribe)\(|@pytest\.mark\.skipif|#\[ignore\]'
 
 # ---------- 共通: 差分の取得とコード digest ----------
@@ -145,7 +147,7 @@ run_change() {
   fi
 
   if [ -z "$code_files" ]; then
-    pass "docs / gate 基盤のみの変更: DRBFM / evidence の gate 対象外"
+    pass "docs / gate 基盤 / lint 設定のみの変更: DRBFM / evidence の gate 対象外"
     return
   fi
   note "コード変更 $(echo "$code_files" | wc -l) ファイル(例: $(echo "$code_files" | head -3 | tr '\n' ' '))"

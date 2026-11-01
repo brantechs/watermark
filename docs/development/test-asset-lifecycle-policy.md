@@ -59,7 +59,7 @@
 ```text
 change : コード変更を含む差分に DRBFM(version_tier)/ dev-intent/<ticket>.md / evidence/<ticket>/ / test-case master 差分 /
          evidence/<ticket>/security-review.md(status: reviewed、reviewed_code_digest が現在のコード差分と一致、未解消所見は review_required: true)があり、
-         既存テストの削除・skip 化がないこと。docs と gate 基盤(`.githooks/` `.github/` `scripts/qa-gate.sh` `scripts/install-githooks.sh`)のみの変更は対象外
+         既存テストの削除・skip 化がないこと。docs と gate 基盤(`.githooks/` `.github/` `scripts/qa-gate.sh` `scripts/install-githooks.sh`)、lint / formatter の設定(`ruff.toml` `.editorconfig` 等。`pyproject.toml` は依存を持つので対象)のみの変更は対象外
 major  : test-inventory/intent-register.md(gap 行なし)/ <date>-v<MAJOR>-inventory.md / evidence/v<MAJOR>.0.0/(evidence-index + security-review)/ release-judgement
 ```
 
