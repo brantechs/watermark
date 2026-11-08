@@ -257,15 +257,17 @@ EOT
     echo "created: $f (status: draft。所見を書いて status: reviewed にする)"
   else
     # 既存ファイルの front matter を更新(reviewed_at / reviewed_head / reviewed_code_digest)。無いキーは追記する。
-    local tmp; tmp="$(mktemp "$ROOT/.qa-gate.XXXXXX")"
-    awk -v now="$now" -v head="$head" -v dg="$dg" '
+    # 一時ファイルを mv で被せず、同じファイルに書き戻す(権限・所有者・ACL を保つ)。mktemp のファイルは mode 600 で、
+    # mv すると ACL で共有している repo では mask も --- になり他のユーザーが読めなくなる(lcl-sim 2026-11-04)。
+    local updated
+    updated="$(awk -v now="$now" -v head="$head" -v dg="$dg" '
       BEGIN{infm=0; done=0}
       NR==1&&$0=="---"{infm=1; print; next}
       infm&&$0=="---"{ if(!seen_at)print "reviewed_at: "now; if(!seen_head)print "reviewed_head: "head; if(!seen_dg)print "reviewed_code_digest: "dg; infm=0; print; next}
       infm&&/^reviewed_at:/{print "reviewed_at: "now; seen_at=1; next}
       infm&&/^reviewed_head:/{print "reviewed_head: "head; seen_head=1; next}
       infm&&/^reviewed_code_digest:/{print "reviewed_code_digest: "dg; seen_dg=1; next}
-      {print}' "$f" > "$tmp" && mv "$tmp" "$f" || { rm -f "$tmp"; echo "front matter の更新に失敗: $f" >&2; exit 1; }
+      {print}' "$f")" && printf '%s\n' "$updated" > "$f" || { echo "front matter の更新に失敗: $f" >&2; exit 1; }
     echo "stamped: $f (reviewed_code_digest=${dg:0:12}, head=$head)"
   fi
   echo "digest: $dg"
